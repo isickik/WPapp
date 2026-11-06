@@ -21,11 +21,12 @@ if not SUPABASE_URL or not SUPABASE_KEY:
     st.error("PALACE is not configured yet. Add SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets.")
     st.stop()
 
-@st.cache_resource
-def make_supabase(url, key):
-    return create_client(url, key)
+# Keep a separate Supabase client per Streamlit browser session.
+# A globally cached client could mix authenticated tokens between users.
+if "_palace_supabase_client" not in st.session_state:
+    st.session_state["_palace_supabase_client"] = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-supabase = make_supabase(SUPABASE_URL, SUPABASE_KEY)
+supabase = st.session_state["_palace_supabase_client"]
 
 # Keep the authenticated access token in Streamlit session state and apply it
 # to the Supabase client so Postgres RLS sees the current auth.uid().
@@ -70,47 +71,70 @@ def delete_row(table, row_id):
 
 
 def auth_screen():
-    st.markdown("# PALACE")
-    st.caption("Noun · From Basque Jauregi / Jauregui")
-    st.caption("THE SEAT OF A FAMILY AND ITS LEGACY")
-    login, signup = st.tabs(["Log in", "Create account"])
-    with login:
+    # Centered PALACE wordmark and invitation-only sign-in screen.
+    st.markdown(
+        """
+        <style>
+        .palace-login-brand {
+            text-align: center;
+            padding-top: 2.5rem;
+            padding-bottom: 1.25rem;
+        }
+        .palace-login-brand .wordmark {
+            font-family: Georgia, 'Times New Roman', serif;
+            font-size: clamp(3rem, 7vw, 5rem);
+            font-weight: 600;
+            letter-spacing: 0.20em;
+            line-height: 1.1;
+            margin: 0;
+        }
+        .palace-login-brand .definition {
+            font-size: 0.9rem;
+            opacity: 0.78;
+            margin-top: 1rem;
+        }
+        .palace-login-brand .motto {
+            font-size: 0.72rem;
+            letter-spacing: 0.18em;
+            margin-top: 0.55rem;
+            opacity: 0.68;
+        }
+        </style>
+        <div class="palace-login-brand">
+            <div class="wordmark">PALACE</div>
+            <div class="definition">Noun · From Basque Jauregi / Jauregui</div>
+            <div class="motto">THE SEAT OF A FAMILY AND ITS LEGACY</div>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    left, center, right = st.columns([1, 1.4, 1])
+    with center:
+        st.markdown("### Welcome back")
+        st.caption("PALACE is invitation-only. Accounts are created by the owner.")
         with st.form("palace_login"):
             email = st.text_input("Email", key="login_email")
             password = st.text_input("Password", type="password", key="login_password")
-            submit = st.form_submit_button("Log in", type="primary", use_container_width=True)
+            submit = st.form_submit_button(
+                "Log in", type="primary", use_container_width=True
+            )
         if submit:
-            try:
-                result = supabase.auth.sign_in_with_password({"email": email.strip(), "password": password})
-                set_session(result.session)
-                st.rerun()
-            except Exception as e:
-                st.error(f"Could not log in: {e}")
-    with signup:
-        with st.form("palace_signup"):
-            full_name = st.text_input("Name")
-            email = st.text_input("Email", key="signup_email")
-            password = st.text_input("Password", type="password", key="signup_password", help="Use at least 8 characters.")
-            confirm = st.text_input("Confirm password", type="password")
-            submit = st.form_submit_button("Create account", type="primary", use_container_width=True)
-        if submit:
-            if not full_name.strip() or not email.strip():
-                st.error("Enter your name and email.")
-            elif len(password) < 8:
-                st.error("Password must be at least 8 characters.")
-            elif password != confirm:
-                st.error("Passwords do not match.")
+            if not email.strip() or not password:
+                st.error("Enter your email and password.")
             else:
                 try:
-                    result = supabase.auth.sign_up({"email": email.strip(), "password": password,
-                        "options": {"data": {"full_name": full_name.strip()}}})
-                    if result.session:
+                    result = supabase.auth.sign_in_with_password(
+                        {"email": email.strip(), "password": password}
+                    )
+                    if not result.session:
+                        st.error("Login did not return a session. Check your account and email confirmation.")
+                    else:
                         set_session(result.session)
                         st.rerun()
-                    else:
-                        st.success("Account created. Check your email to confirm, then log in.")
-                except Exception as e:
-                    st.error(f"Could not create account: {e}")
+                except Exception:
+                    # Avoid exposing backend details on the public login screen.
+                    st.error("Could not log in. Check your email and password, then try again.")
 
 user = current_user()
 if not user:
