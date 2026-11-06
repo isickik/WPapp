@@ -69,6 +69,43 @@ def delete_row(table, row_id):
     # RLS prevents deletion of another user's row even if an ID is guessed.
     return supabase.table(table).delete().eq("id", row_id).execute()
 
+def palace_brand():
+    st.html("""
+    <div style="
+        font-family: Georgia, serif;
+        margin-bottom: 28px;
+        text-align: center;
+    ">
+        <div style="
+            font-size: 42px;
+            font-weight: bold;
+            letter-spacing: 5px;
+            color: #edf2ff;
+        ">
+            PALACE
+        </div>
+
+        <div style="
+            font-size: 15px;
+            font-style: italic;
+            color: #aeb8cc;
+            margin-top: 8px;
+        ">
+            Noun · From Basque Jauregi / Jauregui
+        </div>
+
+        <div style="
+            font-size: 13px;
+            font-style: italic;
+            letter-spacing: 1px;
+            color: #edf2ff;
+            margin-top: 10px;
+        ">
+            THE SEAT OF A FAMILY AND ITS LEGACY
+        </div>
+    </div>
+    """)
+
 
 def auth_screen():
     # Centered PALACE wordmark and invitation-only sign-in screen.
