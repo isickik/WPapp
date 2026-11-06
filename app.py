@@ -69,86 +69,66 @@ def delete_row(table, row_id):
     # RLS prevents deletion of another user's row even if an ID is guessed.
     return supabase.table(table).delete().eq("id", row_id).execute()
 
+
 def palace_brand():
-    st.html("""
-    <div style="
+    # The PALACE wordmark is a real Streamlit button: clicking it reruns the
+    # app and refreshes the dashboard data while keeping the current session.
+    st.markdown("""
+    <style>
+    div[data-testid="stButton"] button[kind="tertiary"] {
         font-family: Georgia, serif;
-        margin-bottom: 28px;
-        text-align: center;
-    ">
-        <div style="
-            font-size: 42px;
-            font-weight: bold;
-            letter-spacing: 5px;
-            color: #edf2ff;
-        ">
-            PALACE
-        </div>
-
-        <div style="
-            font-size: 15px;
-            font-style: italic;
-            color: #aeb8cc;
-            margin-top: 8px;
-        ">
-            Noun · From Basque Jauregi / Jauregui
-        </div>
-
-        <div style="
-            font-size: 13px;
-            font-style: italic;
-            letter-spacing: 1px;
-            color: #edf2ff;
-            margin-top: 10px;
-        ">
-            THE SEAT OF A FAMILY AND ITS LEGACY
-        </div>
-    </div>
-    """)
-
-
-def auth_screen():
-    # Centered PALACE wordmark and invitation-only sign-in screen.
-    st.markdown(
-        """
-        <style>
-        .palace-login-brand {
-            text-align: center;
-            padding-top: 2.5rem;
-            padding-bottom: 1.25rem;
-        }
-        .palace-login-brand .wordmark {
-            font-family: Georgia, 'Times New Roman', serif;
-            font-size: clamp(3rem, 7vw, 5rem);
-            font-weight: 600;
-            letter-spacing: 0.20em;
-            line-height: 1.1;
-            margin: 0;
-        }
-        .palace-login-brand .definition {
-            font-size: 0.9rem;
-            opacity: 0.78;
-            margin-top: 1rem;
-        }
-        .palace-login-brand .motto {
-            font-size: 0.72rem;
-            letter-spacing: 0.18em;
-            margin-top: 0.55rem;
-            opacity: 0.68;
-        }
-        </style>
-        <div class="palace-login-brand">
-            <div class="wordmark">PALACE</div>
-            <div class="definition">Noun · From Basque Jauregi / Jauregui</div>
-            <div class="motto">THE SEAT OF A FAMILY AND ITS LEGACY</div>
-        </div>
-        """,
-        unsafe_allow_html=True,
-    )
+        font-size: 42px;
+        font-weight: bold;
+        letter-spacing: 5px;
+        color: #edf2ff;
+        border: none;
+        background: transparent;
+        padding: 0;
+        min-height: 0;
+        height: auto;
+        box-shadow: none;
+    }
+    div[data-testid="stButton"] button[kind="tertiary"]:hover {
+        color: #ffffff;
+        border: none;
+        background: transparent;
+    }
+    div[data-testid="stButton"] button[kind="tertiary"]:focus:not(:active) {
+        color: #edf2ff;
+        border: none;
+        box-shadow: none;
+    }
+    </style>
+    """, unsafe_allow_html=True)
 
     left, center, right = st.columns([1, 1.4, 1])
     with center:
-        st.markdown("### Welcome")
+        if st.button("PALACE", key="palace_logo_refresh", type="tertiary", use_container_width=True):
+            st.rerun()
+        st.html("""
+        <div style="font-family: Georgia, serif; text-align: center; margin-bottom: 28px;">
+            <div style="font-size: 15px; font-style: italic; color: #aeb8cc; margin-top: 8px;">
+                Noun · From Basque Jauregi / Jauregui
+            </div>
+            <div style="font-size: 13px; font-style: italic; letter-spacing: 1px; color: #edf2ff; margin-top: 10px;">
+                THE SEAT OF A FAMILY AND ITS LEGACY
+            </div>
+        </div>
+        """)
+
+
+def auth_screen():
+    # Use the exact same PALACE branding as the signed-in dashboard.
+    palace_brand()
+
+    left, center, right = st.columns([1, 1.4, 1])
+    with center:
+        st.html("""
+        <div style="text-align: center; font-family: Georgia, serif; margin: 0 0 12px 0;">
+            <div style="font-size: 24px; font-weight: 600; color: #edf2ff;">Welcome back</div>
+        </div>
+        """)
+        st.markdown("<div style='text-align:center; color:#aeb8cc; margin-bottom:12px;'>PALACE is invitation-only. Accounts are created by the owner.</div>", unsafe_allow_html=True)
         with st.form("palace_login"):
             email = st.text_input("Email", key="login_email")
             password = st.text_input("Password", type="password", key="login_password")
@@ -188,9 +168,7 @@ with st.sidebar:
                 st.session_state.pop(key, None)
         st.rerun()
 
-st.markdown("# PALACE")
-st.caption("Noun · From Basque Jauregi / Jauregui")
-st.caption("THE SEAT OF A FAMILY AND ITS LEGACY")
+palace_brand()
 st.info("You are signed in. Your Supabase Row Level Security policies isolate your records by account.")
 
 tab_dashboard, tab_holdings, tab_activity, tab_add = st.tabs(["Dashboard", "Holdings", "Recent Activity", "+ Add"])
