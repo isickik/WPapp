@@ -412,6 +412,133 @@ st.set_page_config(
     layout="wide"
 )
 
+
+# =========================================================
+# PALACE AUTHENTICATION — INVITE ONLY
+# =========================================================
+# Supabase Auth is the front door. Public sign-ups must also be
+# disabled in Supabase Dashboard > Authentication > Settings.
+try:
+    from supabase import create_client
+except ImportError:
+    st.error("Missing dependency: supabase. Add supabase to requirements.txt.")
+    st.stop()
+
+def palace_logo():
+    st.html("""
+    <div style="
+        font-family: Georgia, serif;
+        margin: 0 auto 28px auto;
+        text-align: center;
+        width: 100%;
+    ">
+        <div style="
+            font-size: 42px;
+            font-weight: bold;
+            letter-spacing: 5px;
+            color: #edf2ff;
+        ">
+            PALACE
+        </div>
+        <div style="
+            font-size: 15px;
+            font-style: italic;
+            color: #aeb8cc;
+            margin-top: 8px;
+        ">
+            Noun · From Basque Jauregi / Jauregui
+        </div>
+        <div style="
+            font-size: 13px;
+            font-style: italic;
+            letter-spacing: 1px;
+            color: #edf2ff;
+            margin-top: 10px;
+        ">
+            THE SEAT OF A FAMILY AND ITS LEGACY
+        </div>
+    </div>
+    """)
+
+@st.cache_resource
+def palace_supabase():
+    url = st.secrets.get("SUPABASE_URL", "")
+    key = st.secrets.get("SUPABASE_KEY", "")
+    if not url or not key:
+        return None
+    return create_client(url, key)
+
+supabase = palace_supabase()
+if supabase is None:
+    st.error("PALACE is not configured. Add SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets.")
+    st.stop()
+
+if "palace_access_token" not in st.session_state:
+    st.session_state.palace_access_token = None
+if "palace_user" not in st.session_state:
+    st.session_state.palace_user = None
+
+# Restore the signed-in session for this Streamlit browser session.
+if st.session_state.palace_access_token and st.session_state.palace_user:
+    try:
+        supabase.auth.set_session(
+            st.session_state.palace_access_token,
+            st.session_state.get("palace_refresh_token", "")
+        )
+    except Exception:
+        st.session_state.palace_access_token = None
+        st.session_state.palace_refresh_token = None
+        st.session_state.palace_user = None
+
+if not st.session_state.palace_user:
+    palace_logo()
+    st.markdown(
+        "<div style='text-align:center;color:#aeb8cc;margin:-12px 0 24px 0;"
+        "font-family:Georgia,serif;letter-spacing:1px;'>PRIVATE CLIENT ACCESS</div>",
+        unsafe_allow_html=True,
+    )
+    _, login_col, _ = st.columns([1, 1.15, 1])
+    with login_col:
+        with st.form("palace_sign_in", clear_on_submit=False):
+            email = st.text_input("Email", placeholder="Your invited email")
+            password = st.text_input("Password", type="password", placeholder="Password")
+            submitted = st.form_submit_button("SIGN IN", use_container_width=True)
+        if submitted:
+            if not email.strip() or not password:
+                st.error("Enter your email and password.")
+            else:
+                try:
+                    result = supabase.auth.sign_in_with_password(
+                        {"email": email.strip(), "password": password}
+                    )
+                    user = result.user
+                    if not user or not result.session:
+                        st.error("Sign-in could not be completed.")
+                    else:
+                        st.session_state.palace_user = {
+                            "id": user.id,
+                            "email": user.email,
+                        }
+                        st.session_state.palace_access_token = result.session.access_token
+                        st.session_state.palace_refresh_token = result.session.refresh_token
+                        st.rerun()
+                except Exception:
+                    st.error("Sign-in failed. Check your credentials or ask the PALACE administrator for an invitation.")
+    st.stop()
+
+# The existing full dashboard is shown only after successful authentication.
+with st.sidebar:
+    st.caption(f"Signed in as {st.session_state.palace_user.get('email', '')}")
+    if st.button("Sign out", use_container_width=True):
+        try:
+            supabase.auth.sign_out()
+        except Exception:
+            pass
+        for key in ("palace_user", "palace_access_token", "palace_refresh_token"):
+            st.session_state.pop(key, None)
+        st.rerun()
+
+
 st.markdown("""
 
 <style>
@@ -433,7 +560,7 @@ st.markdown("""
 /* Main app */
 .stApp {
     background: var(--palace-black);
-    color: var(--palace-text);g
+    color: var(--palace-text);
 }
 
 .block-container {
