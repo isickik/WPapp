@@ -111,8 +111,7 @@ def auth_screen():
 
     left, center, right = st.columns([1, 1.4, 1])
     with center:
-        st.markdown("### Welcome back")
-        st.caption("PALACE is invitation-only. Accounts are created by the owner.")
+        st.markdown("### Welcome")
         with st.form("palace_login"):
             email = st.text_input("Email", key="login_email")
             password = st.text_input("Password", type="password", key="login_password")
