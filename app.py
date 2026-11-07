@@ -1,93 +1,147 @@
 import streamlit as st
-import sqlite3
 import pandas as pd
 import yfinance as yf
 import numpy as np
+import re
 
 from datetime import date, timedelta
-from pathlib import Path
-
-DB = Path(__file__).with_name("wealth_tracker.db")
-
+from supabase import create_client
 
 # =========================================================
-# DATABASE
+# SUPABASE DATABASE — USER-SCOPED, RLS-PROTECTED
 # =========================================================
+# The active client is created per Streamlit browser session. Never cache
+# an authenticated client globally: that can mix user sessions.
+supabase = None
+CURRENT_USER_ID = None
 
-def conn():
-    c = sqlite3.connect(DB, check_same_thread=False)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS holdings (
-            id INTEGER PRIMARY KEY,
-            symbol TEXT,
-            name TEXT,
-            asset_type TEXT,
-            quantity REAL,
-            cost_per_unit REAL,
-            account TEXT,
-            created TEXT
-        )
-    """)
+TABLE_COLUMNS = {
+    "holdings": ["id", "user_id", "symbol", "name", "asset_type", "quantity", "cost_per_unit", "account", "created"],
+    "transactions": ["id", "user_id", "date", "kind", "description", "amount", "notes"],
+    "balances": ["id", "user_id", "date", "account", "amount"],
+    "silver_transactions": ["id", "user_id", "date", "kind", "ticker", "ounces", "price_per_ounce", "total_amount", "notes"],
+}
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS transactions (
-            id INTEGER PRIMARY KEY,
-            date TEXT,
-            kind TEXT,
-            description TEXT,
-            amount REAL,
-            notes TEXT
-        )
-    """)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS balances (
-            id INTEGER PRIMARY KEY,
-            date TEXT,
-            account TEXT,
-            amount REAL
-        )
-    """)
+def _table_rows(table, columns="*"):
+    if supabase is None or not CURRENT_USER_ID:
+        raise RuntimeError("PALACE database is not connected to an authenticated user.")
+    response = supabase.table(table).select(columns).execute()
+    return response.data or []
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS networth_snapshots (
-            date TEXT PRIMARY KEY,
-            net_worth REAL,
-            portfolio_value REAL,
-            cash_total REAL
-        )
-    """)
 
-    c.execute("""
-        CREATE TABLE IF NOT EXISTS silver_transactions (
-            id INTEGER PRIMARY KEY,
-            date TEXT NOT NULL,
-            kind TEXT NOT NULL,
-            ticker TEXT NOT NULL DEFAULT 'XAG',
-            ounces REAL NOT NULL,
-            price_per_ounce REAL NOT NULL,
-            total_amount REAL NOT NULL,
-            notes TEXT
-        )
-    """)
-
-    c.commit()
-    return c
+def _table_df(table):
+    return pd.DataFrame(_table_rows(table), columns=TABLE_COLUMNS[table])
 
 
 def q(sql, params=()):
-    c = conn()
-    df = pd.read_sql_query(sql, c, params=params)
-    c.close()
-    return df
+    """Small compatibility layer for the SELECT statements used by PALACE."""
+    normalized = " ".join(str(sql).split())
+    low = normalized.lower()
+
+    if " from holdings " in low:
+        df = _table_df("holdings")
+        if "where symbol = ?" in low and "and account = ?" in low:
+            df = df[(df["symbol"].astype(str) == str(params[0])) &
+                    (df["account"].astype(str) == str(params[1]))]
+        if "order by id desc" in low:
+            df = df.sort_values("id", ascending=False)
+        elif "order by id" in low:
+            df = df.sort_values("id", ascending=True)
+        return df.reset_index(drop=True)
+
+    if " from transactions " in low:
+        df = _table_df("transactions")
+        if "kind in" in low:
+            df = df[(df["date"].astype(str) > str(params[0])) &
+                    df["kind"].isin(["Fidelity cash transfer", "Buy", "Sell"])]
+        elif "kind = 'buy'" in low:
+            df = df[df["kind"] == "Buy"]
+        elif "kind = 'paycheck'" in low:
+            df = df[df["kind"] == "Paycheck"]
+        elif "kind = 'fidelity cash transfer'" in low and "date = ?" in low:
+            df = df[(df["kind"] == "Fidelity cash transfer") &
+                    (df["date"].astype(str) == str(params[0]))]
+            return pd.DataFrame([[pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]], columns=["sum"])
+        elif "kind = 'fidelity cash transfer'" in low and "date >= ?" in low:
+            df = df[(df["kind"] == "Fidelity cash transfer") &
+                    (df["date"].astype(str) >= str(params[0]))]
+            return pd.DataFrame([[pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]], columns=["sum"])
+        if "order by date, id" in low:
+            df = df.sort_values(["date", "id"], ascending=True)
+        elif "order by date desc, id desc" in low:
+            df = df.sort_values(["date", "id"], ascending=[False, False])
+        cols_match = re.match(r"select (.+?) from transactions", normalized, re.I)
+        if cols_match and cols_match.group(1).strip() != "*":
+            cols = [x.strip() for x in cols_match.group(1).split(",")]
+            df = df[cols]
+        return df.reset_index(drop=True)
+
+    if " from balances " in low:
+        df = _table_df("balances")
+        if "order by date desc, id desc" in low:
+            df = df.sort_values(["date", "id"], ascending=[False, False])
+        return df.reset_index(drop=True)
+
+    if " from silver_transactions " in low:
+        df = _table_df("silver_transactions")
+        if "kind = 'buy silver'" in low:
+            df = df[df["kind"] == "Buy Silver"]
+        if "sum(" in low:
+            buys = pd.to_numeric(df.loc[df["kind"] == "Buy Silver", "ounces"], errors="coerce").fillna(0).sum()
+            sells = pd.to_numeric(df.loc[df["kind"] == "Sell Silver", "ounces"], errors="coerce").fillna(0).sum()
+            return pd.DataFrame({"ounces": [buys - sells]})
+        if "order by date desc, id desc" in low:
+            df = df.sort_values(["date", "id"], ascending=[False, False])
+        elif "order by date, id" in low:
+            df = df.sort_values(["date", "id"], ascending=[True, True])
+        cols_match = re.match(r"select (.+?) from silver_transactions", normalized, re.I)
+        if cols_match and cols_match.group(1).strip() != "*":
+            df = df[[x.strip() for x in cols_match.group(1).split(",")]]
+        return df.reset_index(drop=True)
+
+    raise ValueError(f"PALACE query is not supported by the Supabase adapter: {normalized}")
 
 
 def run(sql, params=()):
-    c = conn()
-    c.execute(sql, params)
-    c.commit()
-    c.close()
+    """Execute the INSERT/UPDATE/DELETE statements used by PALACE."""
+    normalized = " ".join(str(sql).split())
+    low = normalized.lower()
+    if supabase is None or not CURRENT_USER_ID:
+        raise RuntimeError("PALACE database is not connected to an authenticated user.")
+
+    delete_match = re.match(r"delete from (holdings|transactions|balances|silver_transactions) where id = \?", normalized, re.I)
+    if delete_match:
+        supabase.table(delete_match.group(1)).delete().eq("id", int(params[0])).execute()
+        return
+
+    insert_match = re.match(r"insert into (holdings|transactions|balances|silver_transactions) \((.*?)\) values \((.*?)\)", normalized, re.I)
+    if insert_match:
+        table, col_text, value_text = insert_match.groups()
+        columns = [x.strip() for x in col_text.split(",")]
+        vals = []
+        param_index = 0
+        for token in [x.strip() for x in value_text.split(",")]:
+            if token == "?":
+                vals.append(params[param_index]); param_index += 1
+            elif token.startswith("'") and token.endswith("'"):
+                vals.append(token[1:-1])
+            else:
+                raise ValueError(f"Unsupported INSERT value: {token}")
+        record = dict(zip(columns, vals))
+        record["user_id"] = CURRENT_USER_ID
+        supabase.table(table).insert(record).execute()
+        return
+
+    if low.startswith("update holdings set quantity = quantity -"):
+        amount, row_id = params
+        existing = supabase.table("holdings").select("quantity").eq("id", int(row_id)).single().execute()
+        current = float(existing.data["quantity"] or 0)
+        supabase.table("holdings").update({"quantity": current - float(amount)}).eq("id", int(row_id)).execute()
+        return
+
+    raise ValueError(f"PALACE write is not supported by the Supabase adapter: {normalized}")
 
 
 def money(value):
@@ -388,7 +442,8 @@ def delete_button(table, row_id, label, key):
             allowed_tables = {
                 "holdings",
                 "transactions",
-                "balances"
+                "balances",
+                "silver_transactions"
             }
 
             if table not in allowed_tables:
@@ -460,13 +515,15 @@ def palace_logo():
     </div>
     """)
 
-@st.cache_resource
-def palace_supabase():
+def palace_supabase(access_token=None, refresh_token=None):
     url = st.secrets.get("SUPABASE_URL", "")
     key = st.secrets.get("SUPABASE_KEY", "")
     if not url or not key:
         return None
-    return create_client(url, key)
+    client = create_client(url, key)
+    if access_token and refresh_token:
+        client.auth.set_session(access_token, refresh_token)
+    return client
 
 supabase = palace_supabase()
 if supabase is None:
@@ -478,13 +535,14 @@ if "palace_access_token" not in st.session_state:
 if "palace_user" not in st.session_state:
     st.session_state.palace_user = None
 
-# Restore the signed-in session for this Streamlit browser session.
+# Restore an isolated Supabase client for this browser session.
 if st.session_state.palace_access_token and st.session_state.palace_user:
     try:
-        supabase.auth.set_session(
+        supabase = palace_supabase(
             st.session_state.palace_access_token,
             st.session_state.get("palace_refresh_token", "")
         )
+        CURRENT_USER_ID = str(st.session_state.palace_user["id"])
     except Exception:
         st.session_state.palace_access_token = None
         st.session_state.palace_refresh_token = None
