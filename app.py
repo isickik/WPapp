@@ -4,6 +4,7 @@ import yfinance as yf
 import numpy as np
 import re
 import json
+import time
 
 from datetime import date, timedelta
 from supabase import create_client
@@ -659,6 +660,9 @@ if not st.session_state.palace_user:
                     else:
                         save_palace_session(result.session, user)
                         CURRENT_USER_ID = str(user.id)
+                        # Give the browser component a moment to write the encrypted
+                        # cookie before Streamlit starts the authenticated rerun.
+                        time.sleep(0.3)
                         st.rerun()
                 except Exception:
                     st.error("Sign-in failed. Check your credentials or ask the PALACE administrator for an invitation.")
