@@ -4,3 +4,4 @@ pandas
 yfinance
 numpy
 plotly
+streamlit-cookies-manager-v2
