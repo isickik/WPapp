@@ -3,6 +3,7 @@ import pandas as pd
 import yfinance as yf
 import numpy as np
 import re
+import json
 
 from datetime import date, timedelta
 from supabase import create_client
@@ -469,15 +470,20 @@ st.set_page_config(
 
 
 # =========================================================
-# PALACE AUTHENTICATION — INVITE ONLY
+# PALACE AUTHENTICATION — INVITE ONLY + PERSISTENT SESSION
 # =========================================================
 # Supabase Auth is the front door. Public sign-ups must also be
 # disabled in Supabase Dashboard > Authentication > Settings.
+# Encrypted browser cookies preserve the Supabase session across refreshes.
 try:
-    from supabase import create_client
+    from streamlit_cookies_manager import EncryptedCookieManager
 except ImportError:
-    st.error("Missing dependency: supabase. Add supabase to requirements.txt.")
+    st.error(
+        "Missing dependency: streamlit-cookies-manager-v2. "
+        "Add streamlit-cookies-manager-v2 to requirements.txt and redeploy."
+    )
     st.stop()
+
 
 def palace_logo():
     st.html("""
@@ -515,6 +521,7 @@ def palace_logo():
     </div>
     """)
 
+
 def palace_supabase(access_token=None, refresh_token=None):
     url = st.secrets.get("SUPABASE_URL", "")
     key = st.secrets.get("SUPABASE_KEY", "")
@@ -525,28 +532,105 @@ def palace_supabase(access_token=None, refresh_token=None):
         client.auth.set_session(access_token, refresh_token)
     return client
 
+
 supabase = palace_supabase()
 if supabase is None:
     st.error("PALACE is not configured. Add SUPABASE_URL and SUPABASE_KEY in Streamlit Secrets.")
     st.stop()
 
+cookies_password = st.secrets.get("COOKIES_PASSWORD", "")
+if not cookies_password or len(cookies_password) < 32:
+    st.error(
+        "PALACE persistent login is not configured. Add COOKIES_PASSWORD "
+        "to Streamlit Secrets (use a unique random value of at least 32 characters)."
+    )
+    st.stop()
+
+cookies = EncryptedCookieManager(
+    prefix="palace-wealth-tracker/",
+    password=cookies_password,
+)
+if not cookies.ready():
+    st.info("Loading your secure PALACE session…")
+    st.stop()
+
 if "palace_access_token" not in st.session_state:
     st.session_state.palace_access_token = None
+if "palace_refresh_token" not in st.session_state:
+    st.session_state.palace_refresh_token = None
 if "palace_user" not in st.session_state:
     st.session_state.palace_user = None
 
-# Restore an isolated Supabase client for this browser session.
-if st.session_state.palace_access_token and st.session_state.palace_user:
+
+def save_palace_session(session, user):
+    """Keep the auth tokens in Streamlit state and an encrypted browser cookie."""
+    st.session_state.palace_access_token = session.access_token
+    st.session_state.palace_refresh_token = session.refresh_token
+    st.session_state.palace_user = {"id": str(user.id), "email": user.email}
+    cookies["supabase_session"] = json.dumps({
+        "access_token": session.access_token,
+        "refresh_token": session.refresh_token,
+    })
+    cookies.save()
+
+
+# Restore from the encrypted cookie after a browser refresh / new Streamlit session.
+if not st.session_state.palace_user:
+    saved_session = cookies.get("supabase_session")
+    if saved_session:
+        try:
+            saved = json.loads(saved_session)
+            access_token = saved.get("access_token")
+            refresh_token = saved.get("refresh_token")
+            if access_token and refresh_token:
+                restored_client = palace_supabase()
+                try:
+                    auth_result = restored_client.auth.set_session(access_token, refresh_token)
+                except Exception:
+                    # If the access token expired, explicitly try the refresh token.
+                    auth_result = restored_client.auth.refresh_session(refresh_token)
+                restored_session = getattr(auth_result, "session", None)
+                if restored_session is None:
+                    restored_session = restored_client.auth.get_session()
+                user_result = restored_client.auth.get_user(restored_session.access_token)
+                restored_user = getattr(user_result, "user", None)
+                if restored_user and restored_session:
+                    supabase = restored_client
+                    save_palace_session(restored_session, restored_user)
+        except Exception:
+            # Invalid/revoked/expired cookie: clear it and require a fresh login.
+            try:
+                del cookies["supabase_session"]
+                cookies.save()
+            except Exception:
+                pass
+            st.session_state.palace_access_token = None
+            st.session_state.palace_refresh_token = None
+            st.session_state.palace_user = None
+
+# Rebuild an isolated client from the current Streamlit session on every rerun.
+if st.session_state.palace_access_token and st.session_state.palace_refresh_token and st.session_state.palace_user:
     try:
         supabase = palace_supabase(
             st.session_state.palace_access_token,
-            st.session_state.get("palace_refresh_token", "")
+            st.session_state.palace_refresh_token,
         )
         CURRENT_USER_ID = str(st.session_state.palace_user["id"])
+        # Persist rotated tokens if Supabase refreshed them during set_session.
+        active_session = supabase.auth.get_session()
+        if active_session and active_session.refresh_token:
+            cookies["supabase_session"] = json.dumps({
+                "access_token": active_session.access_token,
+                "refresh_token": active_session.refresh_token,
+            })
+            cookies.save()
+            st.session_state.palace_access_token = active_session.access_token
+            st.session_state.palace_refresh_token = active_session.refresh_token
     except Exception:
         st.session_state.palace_access_token = None
         st.session_state.palace_refresh_token = None
         st.session_state.palace_user = None
+        CURRENT_USER_ID = None
 
 if not st.session_state.palace_user:
     palace_logo()
@@ -573,12 +657,8 @@ if not st.session_state.palace_user:
                     if not user or not result.session:
                         st.error("Sign-in could not be completed.")
                     else:
-                        st.session_state.palace_user = {
-                            "id": user.id,
-                            "email": user.email,
-                        }
-                        st.session_state.palace_access_token = result.session.access_token
-                        st.session_state.palace_refresh_token = result.session.refresh_token
+                        save_palace_session(result.session, user)
+                        CURRENT_USER_ID = str(user.id)
                         st.rerun()
                 except Exception:
                     st.error("Sign-in failed. Check your credentials or ask the PALACE administrator for an invitation.")
@@ -592,8 +672,14 @@ with st.sidebar:
             supabase.auth.sign_out()
         except Exception:
             pass
+        try:
+            del cookies["supabase_session"]
+            cookies.save()
+        except Exception:
+            pass
         for key in ("palace_user", "palace_access_token", "palace_refresh_token"):
             st.session_state.pop(key, None)
+        CURRENT_USER_ID = None
         st.rerun()
 
 
