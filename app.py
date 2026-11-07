@@ -113,7 +113,7 @@ def run(sql, params=()):
 
     delete_match = re.match(r"delete from (holdings|transactions|balances|silver_transactions) where id = \?", normalized, re.I)
     if delete_match:
-        supabase.table(delete_match.group(1)).delete().eq("id", int(params[0])).execute()
+        supabase.table(delete_match.group(1)).delete().eq("id", int(params[0])).eq("user_id", CURRENT_USER_ID).execute()
         return
 
     insert_match = re.match(r"insert into (holdings|transactions|balances|silver_transactions) \((.*?)\) values \((.*?)\)", normalized, re.I)
@@ -136,9 +136,9 @@ def run(sql, params=()):
 
     if low.startswith("update holdings set quantity = quantity -"):
         amount, row_id = params
-        existing = supabase.table("holdings").select("quantity").eq("id", int(row_id)).single().execute()
+        existing = supabase.table("holdings").select("quantity").eq("id", int(row_id)).eq("user_id", CURRENT_USER_ID).single().execute()
         current = float(existing.data["quantity"] or 0)
-        supabase.table("holdings").update({"quantity": current - float(amount)}).eq("id", int(row_id)).execute()
+        supabase.table("holdings").update({"quantity": current - float(amount)}).eq("id", int(row_id)).eq("user_id", CURRENT_USER_ID).execute()
         return
 
     raise ValueError(f"PALACE write is not supported by the Supabase adapter: {normalized}")
@@ -729,6 +729,7 @@ hr {
 }
 </style>
 """, unsafe_allow_html=True)
+
 
 st.html("""
 <div style="
@@ -1961,6 +1962,38 @@ with dashboard_tab:
                 use_container_width=True,
                 hide_index=True
             )
+
+            # Each holding lot can be removed directly, even if it has no
+            # matching transaction record. This is important for manually
+            # entered/imported positions and is scoped to the signed-in user.
+            st.subheader("Individual Holding Lots")
+            st.caption(
+                "Delete a specific lot here. This does not require a Buy or Sell transaction."
+            )
+
+            for _, lot in selected_rows.sort_values("id", ascending=False).iterrows():
+                lot_col, account_col, quantity_col, cost_col, delete_col = st.columns(
+                    [2.2, 1.5, 1.1, 1.3, 0.6]
+                )
+                with lot_col:
+                    st.markdown(f"**{lot.get('name', selected_symbol)}**")
+                    st.caption(f"Lot #{int(lot['id'])}")
+                with account_col:
+                    st.caption("Account")
+                    st.write(str(lot.get("account") or "Unspecified"))
+                with quantity_col:
+                    st.caption("Shares")
+                    st.write(f"{safe_float(lot.get('quantity')):,.4f}")
+                with cost_col:
+                    st.caption("Cost per share")
+                    st.write(money(lot.get("cost_per_unit")))
+                with delete_col:
+                    delete_button(
+                        "holdings",
+                        lot["id"],
+                        f"{selected_symbol} holding lot",
+                        f"holding_{selected_symbol}"
+                    )
 
             price_data = stock_history(selected_symbol, "1y")
 
