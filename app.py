@@ -730,8 +730,6 @@ hr {
 </style>
 """, unsafe_allow_html=True)
 
-conn().close()
-
 st.html("""
 <div style="
     font-family: Georgia, serif;
