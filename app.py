@@ -85,7 +85,7 @@ def q(sql, params=()):
         return df.reset_index(drop=True)
 
         if " from silver_transactions " in low or " from silver_transactions" in low:
-        df = _table_df("silver_transactions")
+            df = _table_df("silver_transactions")
 
         if "kind = 'buy silver'" in low:
             df = df[df["kind"] == "Buy Silver"]
