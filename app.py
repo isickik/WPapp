@@ -84,21 +84,40 @@ def q(sql, params=()):
             df = df.sort_values(["date", "id"], ascending=[False, False])
         return df.reset_index(drop=True)
 
-    if " from silver_transactions " in low:
+       if " from silver_transactions " in low or " from silver_transactions" in low:
         df = _table_df("silver_transactions")
+
         if "kind = 'buy silver'" in low:
             df = df[df["kind"] == "Buy Silver"]
+
         if "sum(" in low:
-            buys = pd.to_numeric(df.loc[df["kind"] == "Buy Silver", "ounces"], errors="coerce").fillna(0).sum()
-            sells = pd.to_numeric(df.loc[df["kind"] == "Sell Silver", "ounces"], errors="coerce").fillna(0).sum()
+            buys = pd.to_numeric(
+                df.loc[df["kind"] == "Buy Silver", "ounces"],
+                errors="coerce"
+            ).fillna(0).sum()
+
+            sells = pd.to_numeric(
+                df.loc[df["kind"] == "Sell Silver", "ounces"],
+                errors="coerce"
+            ).fillna(0).sum()
+
             return pd.DataFrame({"ounces": [buys - sells]})
+
         if "order by date desc, id desc" in low:
             df = df.sort_values(["date", "id"], ascending=[False, False])
         elif "order by date, id" in low:
             df = df.sort_values(["date", "id"], ascending=[True, True])
-        cols_match = re.match(r"select (.+?) from silver_transactions", normalized, re.I)
+
+        cols_match = re.match(
+            r"select (.+?) from silver_transactions",
+            normalized,
+            re.I
+        )
+
         if cols_match and cols_match.group(1).strip() != "*":
-            df = df[[x.strip() for x in cols_match.group(1).split(",")]]
+            cols = [x.strip() for x in cols_match.group(1).split(",")]
+            df = df[cols]
+
         return df.reset_index(drop=True)
 
     raise ValueError(f"PALACE query is not supported by the Supabase adapter: {normalized}")
