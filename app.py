@@ -36,56 +36,85 @@ def _table_df(table):
 
 
 def q(sql, params=()):
-    """Small compatibility layer for the SELECT statements used by PALACE."""
+    """Compatibility adapter for PALACE SELECT queries."""
     normalized = " ".join(str(sql).split())
     low = normalized.lower()
+    params = params or ()
 
-    if " from holdings " in low:
+    def table_match(name):
+        return re.search(rf"\bfrom\s+{re.escape(name)}\b", low) is not None
+
+    # HOLDINGS
+    if table_match("holdings"):
         df = _table_df("holdings")
+
         if "where symbol = ?" in low and "and account = ?" in low:
-            df = df[(df["symbol"].astype(str) == str(params[0])) &
-                    (df["account"].astype(str) == str(params[1]))]
+            df = df[
+                (df["symbol"].astype(str) == str(params[0])) &
+                (df["account"].astype(str) == str(params[1]))
+            ]
+
         if "order by id desc" in low:
             df = df.sort_values("id", ascending=False)
         elif "order by id" in low:
             df = df.sort_values("id", ascending=True)
+
         return df.reset_index(drop=True)
 
-    if " from transactions " in low:
+    # TRANSACTIONS
+    if table_match("transactions"):
         df = _table_df("transactions")
+
         if "kind in" in low:
-            df = df[(df["date"].astype(str) > str(params[0])) &
-                    df["kind"].isin(["Fidelity cash transfer", "Buy", "Sell"])]
+            df = df[
+                (df["date"].astype(str) > str(params[0])) &
+                df["kind"].isin(["Fidelity cash transfer", "Buy", "Sell"])
+            ]
         elif "kind = 'buy'" in low:
             df = df[df["kind"] == "Buy"]
         elif "kind = 'paycheck'" in low:
             df = df[df["kind"] == "Paycheck"]
         elif "kind = 'fidelity cash transfer'" in low and "date = ?" in low:
-            df = df[(df["kind"] == "Fidelity cash transfer") &
-                    (df["date"].astype(str) == str(params[0]))]
-            return pd.DataFrame([[pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]], columns=["sum"])
+            df = df[
+                (df["kind"] == "Fidelity cash transfer") &
+                (df["date"].astype(str) == str(params[0]))
+            ]
+            return pd.DataFrame({
+                "sum": [pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]
+            })
         elif "kind = 'fidelity cash transfer'" in low and "date >= ?" in low:
-            df = df[(df["kind"] == "Fidelity cash transfer") &
-                    (df["date"].astype(str) >= str(params[0]))]
-            return pd.DataFrame([[pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]], columns=["sum"])
+            df = df[
+                (df["kind"] == "Fidelity cash transfer") &
+                (df["date"].astype(str) >= str(params[0]))
+            ]
+            return pd.DataFrame({
+                "sum": [pd.to_numeric(df["amount"], errors="coerce").fillna(0).sum()]
+            })
+
         if "order by date, id" in low:
             df = df.sort_values(["date", "id"], ascending=True)
         elif "order by date desc, id desc" in low:
             df = df.sort_values(["date", "id"], ascending=[False, False])
+
         cols_match = re.match(r"select (.+?) from transactions", normalized, re.I)
         if cols_match and cols_match.group(1).strip() != "*":
             cols = [x.strip() for x in cols_match.group(1).split(",")]
             df = df[cols]
+
         return df.reset_index(drop=True)
 
-    if " from balances " in low:
+    # BALANCES
+    if table_match("balances"):
         df = _table_df("balances")
+
         if "order by date desc, id desc" in low:
             df = df.sort_values(["date", "id"], ascending=[False, False])
+
         return df.reset_index(drop=True)
 
-        if " from silver_transactions " in low or " from silver_transactions" in low:
-            df = _table_df("silver_transactions")
+    # SILVER TRANSACTIONS
+    if table_match("silver_transactions"):
+        df = _table_df("silver_transactions")
 
         if "kind = 'buy silver'" in low:
             df = df[df["kind"] == "Buy Silver"]
@@ -120,7 +149,9 @@ def q(sql, params=()):
 
         return df.reset_index(drop=True)
 
-    raise ValueError(f"PALACE query is not supported by the Supabase adapter: {normalized}")
+    raise ValueError(
+        f"PALACE query is not supported by the Supabase adapter: {normalized}"
+    )
 
 
 def run(sql, params=()):
